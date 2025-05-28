@@ -3,13 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:pos_noscale_barcode/A_PROVIDER/system_provider.dart';
 import 'package:provider/provider.dart';
-import 'package:flutter_serial/flutter_serial.dart';
+import 'package:usb_serial/usb_serial.dart';
 
 class ScaleProvider with ChangeNotifier {
-  FlutterSerial _device = FlutterSerial();
-
-  List<String>? serialList = [];
-
+  UsbDevice? _device;
+  UsbPort? _port;
   StreamSubscription? _subscription;
   String _DATA = "0.00";
   bool _tare = false;
@@ -25,82 +23,81 @@ class ScaleProvider with ChangeNotifier {
   double _buff = 0;
   double _tare_buff = 0;
   bool _state_tare = false;
-
-  String logData = "";
-  String receivedData = "";
-  int count1 = 0;
-  String format = "0";
   String get_data() {
     return _DATA;
   }
 
-  Future<void> getSerialList() async {
-    serialList = await _device?.getAvailablePorts();
-    //   print(serialList);
-  }
-
   Future<void> initialize(context) async {
     final system_provider systems = Provider.of<system_provider>(context, listen: false);
-    format = systems.get_all()[0].format_input;
-    notifyListeners();
-    // List<UsbDevice> devices = await UsbSerial.listDevices();
-    /*  int selectedBaudRate = FlutterSerial().baudRateList.first;
+    String format = systems.get_all()[0].format_input;
 
-    FlutterSerial flutterSerial = FlutterSerial();*/
-
-    /* _device?.startSerial().listen(start);
-
-    getSerialList();*/
-    _device.startSerial().listen(start);
-    getSerialList();
-
-    await Future.delayed(Duration(seconds: 2));
-
-    if (format == "jhs") {
-      _device.openPort(dataFormat: DataFormat.ASCII, serialPort: "/dev/ttyS8", baudRate: 9600); //ttyCH341USB3
-    } else {
-      _device.openPort(dataFormat: DataFormat.ASCII, serialPort: "/dev/ttyUSB0", baudRate: 9600); //ttyCH341USB3
-    }
-
-    timer = Timer.periodic(Duration(seconds: 1), (timer) {
-      if (count1 == 0) {
-        _DATA = "NO_signal";
-        //   print("NO_signal");
-
-        notifyListeners();
+    List<UsbDevice> devices = await UsbSerial.listDevices();
+    if (devices.isNotEmpty) {
+      if (format == "jhs") {
+        for (var usbDevice in devices) {
+          if (usbDevice.productName == "USB Serial") {
+            _device = usbDevice;
+            break;
+          }
+        }
       } else {
-        count1 = 0;
-        notifyListeners();
-      }
-    });
-  }
-
-  Future<void> start(SerialResponse? result) async {
-    String _input = result?.readChannel ?? "";
-
-    if (_input.isNotEmpty) {
-      try {
-        _DATA = _input.length > 23 ? _input.substring(23).trim() : "NO DATA";
-        _DATA = FORMAT(_DATA, format);
-        stable_input(_DATA);
-        _DATA = Zero(_DATA);
-        _DATA = Tare(_DATA);
-
-        count1++;
-
-        notifyListeners();
-      } catch (e) {
-        //  showAlertDialogG(context, e.toString());
-        _DATA = e.toString();
-        notifyListeners();
+        for (var usbDevice in devices) {
+          if (usbDevice.productName == "USB2.0-Ser!") {
+            _device = usbDevice;
+            break;
+          }
+        }
       }
 
-      await Future.microtask(() {
-        _device.clearLog();
-        _device.clearRead();
+      int count1 = 0;
+
+      timer = Timer.periodic(Duration(seconds: 1), (timer) {
+        if (count1 == 0) {
+          _DATA = "NO_signal";
+          //   print("NO_signal");
+
+          notifyListeners();
+        } else {
+          count1 = 0;
+          notifyListeners();
+        }
       });
-    }
 
+      if (_device != null) {
+        _port = await _device!.create();
+        if (_port != null) {
+          await _port!.open();
+          await _port!.setDTR(true);
+          await _port!.setRTS(true);
+          await _port!.setPortParameters(
+            9600,
+            UsbPort.DATABITS_8,
+            UsbPort.STOPBITS_1,
+            UsbPort.PARITY_NONE,
+          );
+        }
+
+        _subscription = _port!.inputStream!.listen((List<int> data) {
+          for (int i = 0; i < data.length; i++) {
+            data[i] = data[i] & 0x7F;
+          }
+          try {
+            _DATA = FORMAT(data, format);
+            stable_input(_DATA);
+            _DATA = Zero(_DATA);
+            _DATA = Tare(_DATA);
+
+            count1++;
+
+            notifyListeners();
+          } catch (e) {
+            //  showAlertDialogG(context, e.toString());
+            _DATA = e.toString();
+            notifyListeners();
+          }
+        });
+      }
+    }
     notifyListeners();
   }
 
@@ -164,65 +161,144 @@ class ScaleProvider with ChangeNotifier {
 
   @override
   void dispose() {
-    _device?.clearRead();
-    _device?.destroy();
-
+    _port?.close();
     super.dispose();
   }
 
-  String FORMAT(String data, String format) {
-    List<int> bytes = data.codeUnits;
+  String FORMAT(List<int> data, String format) {
     String data_out = "";
-
     if (format == "0") {
-      if (bytes.length > 9) {
-        if (bytes[3] != 0x20) data_out += String.fromCharCode(bytes[3]);
-        if (bytes[4] != 0x20) data_out += String.fromCharCode(bytes[4]);
-        if (bytes[5] != 0x20) data_out += String.fromCharCode(bytes[5]);
-        if (bytes[6] != 0x20) data_out += String.fromCharCode(bytes[6]);
-        if (bytes[7] != 0x20) data_out += String.fromCharCode(bytes[7]);
-        if (bytes[8] != 0x20) data_out += String.fromCharCode(bytes[8]);
-        if (bytes[9] != 0x20) data_out += String.fromCharCode(bytes[9]);
+      if (data[3] != 0x20) {
+        data_out += String.fromCharCodes([data[3]]);
+      }
+      if (data[4] != 0x20) {
+        data_out += String.fromCharCodes([data[4]]);
+      }
+      if (data[5] != 0x20) {
+        data_out += String.fromCharCodes([data[5]]);
+      }
+      if (data[6] != 0x20) {
+        data_out += String.fromCharCodes([data[6]]);
+      }
+      if (data[7] != 0x20) {
+        data_out += String.fromCharCodes([data[7]]);
+      }
+      if (data[8] != 0x20) {
+        data_out += String.fromCharCodes([data[8]]);
+      }
+      if (data[9] != 0x20) {
+        data_out += String.fromCharCodes([data[9]]);
       }
     } else if (format == "1") {
-      if (bytes.length > 9) {
-        if (bytes[5] != 0x20) data_out += String.fromCharCode(bytes[5]);
-        if (bytes[1] == 0xFE) data_out += ".";
-        if (bytes[6] != 0x20) data_out += String.fromCharCode(bytes[6]);
-        if (bytes[1] == 0xFD) data_out += ".";
-        if (bytes[7] != 0x20) data_out += String.fromCharCode(bytes[7]);
-        if (bytes[1] == 0xFC) data_out += ".";
-        if (bytes[8] != 0x20) data_out += String.fromCharCode(bytes[8]);
-        if (bytes[1] == 0xFB) data_out += ".";
-        if (bytes[9] != 0x20) data_out += String.fromCharCode(bytes[9]);
+      // FA FB FC FD
+      if (data[5] != 0x20) {
+        data_out += String.fromCharCodes([data[5]]);
+      }
+      if (data[1] == 0xFE) {
+        data_out += ".";
+      }
+      if (data[6] != 0x20) {
+        data_out += String.fromCharCodes([data[6]]);
+      }
+      if (data[1] == 0xFD) {
+        data_out += ".";
+      }
+      if (data[7] != 0x20) {
+        data_out += String.fromCharCodes([data[7]]);
+      }
+      if (data[1] == 0xFC) {
+        data_out += ".";
+      }
+      if (data[8] != 0x20) {
+        data_out += String.fromCharCodes([data[8]]);
+      }
+      if (data[1] == 0xFB) {
+        data_out += ".";
+      }
+      if (data[9] != 0x20) {
+        data_out += String.fromCharCodes([data[9]]);
       }
     } else if (format == "2") {
-      if (bytes.length > 13) {
-        for (int i = 6; i <= 13; i++) {
-          if (bytes[i] != 0x20) {
-            data_out += String.fromCharCode(bytes[i]);
-          }
-        }
+      //format == "2"
+      if (data[6] != 0x20) {
+        data_out += String.fromCharCodes([data[6]]);
+      }
+      if (data[7] != 0x20) {
+        data_out += String.fromCharCodes([data[7]]);
+      }
+      if (data[8] != 0x20) {
+        data_out += String.fromCharCodes([data[8]]);
+      }
+      if (data[9] != 0x20) {
+        data_out += String.fromCharCodes([data[9]]);
+      }
+      if (data[10] != 0x20) {
+        data_out += String.fromCharCodes([data[10]]);
+      }
+      if (data[11] != 0x20) {
+        data_out += String.fromCharCodes([data[11]]);
+      }
+      if (data[12] != 0x20) {
+        data_out += String.fromCharCodes([data[12]]);
+      }
+      if (data[13] != 0x20) {
+        data_out += String.fromCharCodes([data[13]]);
       }
     } else if (format == "3") {
-      if (bytes.length > 8) {
-        for (int i = 1; i <= 8; i++) {
-          if (bytes[i] != 0x20) {
-            data_out += String.fromCharCode(bytes[i]);
-          }
-        }
+      if (data[1] != 0x20) {
+        data_out += String.fromCharCodes([data[1]]);
+      }
+      if (data[2] != 0x20) {
+        data_out += String.fromCharCodes([data[2]]);
+      }
+      if (data[3] != 0x20) {
+        data_out += String.fromCharCodes([data[3]]);
+      }
+      if (data[4] != 0x20) {
+        data_out += String.fromCharCodes([data[4]]);
+      }
+      if (data[5] != 0x20) {
+        data_out += String.fromCharCodes([data[5]]);
+      }
+      if (data[6] != 0x20) {
+        data_out += String.fromCharCodes([data[6]]);
+      }
+      if (data[7] != 0x20) {
+        data_out += String.fromCharCodes([data[7]]);
+      }
+      if (data[8] != 0x20) {
+        data_out += String.fromCharCodes([data[8]]);
       }
     } else if (format == "jhs") {
-      if (bytes.length > 11) {
-        if (bytes[4] != 0x20 && bytes[4] == "-".codeUnitAt(0)) {
-          data_out += "-";
-        }
-        for (int i = 5; i <= 11; i++) {
-          if (bytes[i] != 0x20) {
-            data_out += String.fromCharCode(bytes[i]);
-          }
+      if (data[4] != 0x20) {
+        if (String.fromCharCodes([data[4]]) == "-") {
+          data_out += String.fromCharCodes([data[4]]);
         }
       }
+      if (data[5] != 0x20) {
+        data_out += String.fromCharCodes([data[5]]);
+      }
+      if (data[6] != 0x20) {
+        data_out += String.fromCharCodes([data[6]]);
+      }
+      if (data[7] != 0x20) {
+        data_out += String.fromCharCodes([data[7]]);
+      }
+      if (data[8] != 0x20) {
+        data_out += String.fromCharCodes([data[8]]);
+      }
+      if (data[9] != 0x20) {
+        data_out += String.fromCharCodes([data[9]]);
+      }
+      if (data[10] != 0x20) {
+        data_out += String.fromCharCodes([data[10]]);
+      }
+      if (data[11] != 0x20) {
+        data_out += String.fromCharCodes([data[11]]);
+      }
+      /* if (data[8] != 0x20) {
+        data_out += String.fromCharCodes([data[8]]);
+      }*/
     } else {
       data_out = "ERROR";
     }

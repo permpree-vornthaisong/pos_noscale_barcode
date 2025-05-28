@@ -54,7 +54,6 @@ dependencies:
   flutter_svg: ^2.0.10+1
   esc_pos_utils: ^1.0.0
   syncfusion_flutter_pdf: ^25.2.7
-  flutter_serial: ^0.0.3
 
   
 #flutter_launcher_icons:

@@ -17,6 +17,8 @@ import 'package:pos_noscale_barcode/A_SQLITE/sqlite.dart';
 import 'package:provider/provider.dart';
 
 class inner_printter_provider with ChangeNotifier {
+  static const MethodChannel _weightChannel =
+      MethodChannel('com.example.pos_noscale_barcode/printer_weight');
   static const platform =
       MethodChannel('com.example.pos_noscale_barcode/printer');
   bool _isConnected = false;
@@ -39,6 +41,41 @@ class inner_printter_provider with ChangeNotifier {
       }
     } on PlatformException catch (e) {
       print("Failed to initialize printer: ${e.message}");
+    }
+  }
+
+  Future<void> readAndPrintWeight() async {
+    print("Attempting to read weight..."); // พิมพ์แจ้งเตือนว่ากำลังเริ่มอ่าน
+
+    try {
+      // กำหนด portPath และ baudRate ที่ถูกต้องสำหรับเครื่องชั่งของคุณ
+      // <<--- สำคัญ: เปลี่ยนเป็นพอร์ตจริงของคุณ (อาจจะไม่ใช่ ttyS8 เสมอไป)
+      final String weightPortPath = "/dev/ttyS8";
+      // <<--- สำคัญ: เปลี่ยนเป็น baud rate จริงของคุณ
+      final int weightBaudRate = 9600;
+
+      // เรียกใช้เมธอด 'readWeight' ใน Native ผ่าน _weightChannel
+      final String? rawData = await _weightChannel.invokeMethod(
+        'readWeight',
+        {
+          'portPath': weightPortPath,
+          'baudRate': weightBaudRate,
+        },
+      );
+
+      if (rawData != null) {
+        print(
+            "Successfully read raw weight data: $rawData"); // พิมพ์ข้อมูลที่ได้
+        // คุณสามารถเพิ่ม logic เพื่อแสดงข้อมูลน้ำหนักใน UI ที่นี่
+      } else {
+        print("No raw data received from scale."); // กรณีที่ไม่มีข้อมูลกลับมา
+      }
+    } on PlatformException catch (e) {
+      // ดักจับข้อผิดพลาดที่ส่งมาจาก Native
+      print("Error reading weight: ${e.code} - ${e.message}");
+    } catch (e) {
+      // ดักจับข้อผิดพลาดอื่นๆ ที่อาจเกิดขึ้น
+      print("An unexpected error occurred: $e");
     }
   }
 
@@ -73,7 +110,7 @@ class inner_printter_provider with ChangeNotifier {
     }
 
     try {
-      await Future.delayed(Duration(milliseconds: 200));
+      // ลบ await Future.delayed(Duration(milliseconds: 200)); ออก
 
       // ส่ง byte array โดยตรง
       await platform.invokeMethod('printBytes', {
@@ -81,7 +118,10 @@ class inner_printter_provider with ChangeNotifier {
         'data': Uint8List.fromList(data), // แปลงเป็น Uint8List
       });
 
-      await Future.delayed(Duration(milliseconds: 200));
+      // ลบ await Future.delayed(Duration(milliseconds: 200)); ออก
+      // คุณยังคงมีการเรียก readAndPrintWeight() ที่ถูกคอมเมนต์ไว้ในโค้ดเดิม
+      // ถ้าคุณต้องการเรียกใช้งาน ให้ uncomment บรรทัดนั้น
+      // readAndPrintWeight();
     } on PlatformException catch (e) {
       print("Failed to write data: ${e.message}");
       throw Exception("Failed to write to printer");

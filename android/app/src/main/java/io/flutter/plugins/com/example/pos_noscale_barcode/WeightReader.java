@@ -9,8 +9,14 @@ public class WeightReader {
 
   private static final String TAG = "WeightReader";
   private FileInputStream input;
+  // **เพิ่มสองบรรทัดนี้เพื่อติดตามสถานะพอร์ตที่เปิดอยู่**
   private String currentPortPath = null;
   private int currentBaudRate = 0; // เก็บ baud rate ที่ใช้เปิดพอร์ต
+
+  // เพิ่ม Constructor เพื่อให้สามารถสร้าง object ได้ (ถ้ายังไม่มี)
+  public WeightReader() {
+    // Initialization logic if needed
+  }
 
   /**
    * Opens the specified serial port for reading.
@@ -20,18 +26,30 @@ public class WeightReader {
    * @return true if the port was opened successfully, false otherwise.
    */
   public boolean openPort(String portPath, int baudRate) {
+    // ตรวจสอบว่าพอร์ตเดียวกันเปิดอยู่แล้วหรือไม่
+    if (isPortCurrentlyOpen(portPath, baudRate)) {
+      Log.w(
+        TAG,
+        "WeightReader: Port " + portPath + " is already open with baud rate " + baudRate
+      );
+      return true;
+    }
+
     try {
-      closePort(); // Close any existing connection first
+      closePort(); // ปิดการเชื่อมต่อเดิมก่อนเสมอ
 
       File device = new File(portPath);
+      // ตรวจสอบว่าไฟล์พอร์ตมีอยู่และสามารถอ่านได้
       if (!device.exists() || !device.canRead()) {
-        Log.e(TAG, "Device not found or not readable: " + portPath);
+        Log.e(TAG, "WeightReader: Device not found or not readable: " + portPath);
+        this.currentPortPath = null; // รีเซ็ตสถานะ
+        this.currentBaudRate = 0;
         return false;
       }
 
-      input = new FileInputStream(device);
-      currentPortPath = portPath;
-      currentBaudRate = baudRate;
+      input = new FileInputStream(device); // เปิด FileInputStream เพื่ออ่านข้อมูล
+      this.currentPortPath = portPath;
+      this.currentBaudRate = baudRate;
       Log.d(
         TAG,
         "WeightReader: Port opened successfully at " +
@@ -39,28 +57,26 @@ public class WeightReader {
         " baud for reading."
       );
       return true;
-    } catch (Exception e) {
+    } catch (IOException e) {
+      this.currentPortPath = null; // รีเซ็ตสถานะหากเปิดไม่สำเร็จ
+      this.currentBaudRate = 0;
       Log.e(TAG, "WeightReader: Error opening port: " + e.getMessage());
       return false;
     }
   }
 
   /**
-   * Reads data from the specified serial port and attempts to extract and adjust a weight value.
+   * Reads data from the specified serial port and prints it to Logcat.
+   * This method does not parse or adjust weight; it only displays raw data.
    *
    * @param portPath The path to the serial port (e.g., "/dev/ttyS8").
    * @param baudRate The baud rate for the serial port.
-   * @param tareWeight The weight to subtract from the read value to achieve a "zero" reading.
-   * @return The adjusted weight as a String, or null if an error occurs or weight cannot be parsed.
+   * @return The raw data read from the port as a String, or null if an error occurs or no data is read.
    */
-  public String readWeight(String portPath, int baudRate, double tareWeight) {
+  public String readAndLogRawData(String portPath, int baudRate) {
     try {
-      // Check if the port is open and matches the requested port. If not, try to open it.
-      if (
-        input == null ||
-        !portPath.equals(currentPortPath) ||
-        currentBaudRate != baudRate
-      ) {
+      // ถ้าพอร์ตยังไม่ได้เปิด หรือพารามิเตอร์ไม่ตรงกัน ให้พยายามเปิดพอร์ตก่อน
+      if (!isPortCurrentlyOpen(portPath, baudRate)) {
         Log.d(
           TAG,
           "WeightReader: Port not open or parameters changed. Attempting to open: " +
@@ -77,45 +93,29 @@ public class WeightReader {
         }
       }
 
-      // Read data from the serial port
-      byte[] buffer = new byte[128]; // Adjust buffer size as needed based on your scale's output length
-      int bytesRead = input.read(buffer);
-      if (bytesRead > 0) {
-        String data = new String(buffer, 0, bytesRead).trim();
-        Log.d(TAG, "WeightReader: Raw data from " + portPath + ": '" + data + "'");
-
-        // Attempt to extract the numeric weight value
-        // This regex looks for a sequence of digits, a dot, and digits, possibly preceded by a sign
-        // followed by "kg" (case-insensitive, with optional spaces)
-        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("([+-]?\\d+\\.\\d+)\\s*kg", java.util.regex.Pattern.CASE_INSENSITIVE);
-        java.util.regex.Matcher matcher = pattern.matcher(data);
-
-        if (matcher.find()) {
-          String weightStr = matcher.group(1);
-          try {
-            double rawWeight = Double.parseDouble(weightStr);
-            double adjustedWeight = rawWeight - tareWeight;
-            // Format to 3 decimal places with " kg" suffix
-            return String.format("%.3f kg", adjustedWeight);
-          } catch (NumberFormatException e) {
-            Log.e(
-              TAG,
-              "WeightReader: Error parsing weight number: " + weightStr
-            );
-            return null;
-          }
-        } else {
-          Log.w(
-            TAG,
-            "WeightReader: No weight pattern found in data: '" + data + "'"
-          );
+      if (input == null) {
+          Log.e(TAG, "WeightReader: Input stream is null after attempting to open port.");
           return null;
-        }
+      }
+
+      // อ่านข้อมูลจาก serial port
+      byte[] buffer = new byte[128]; // ปรับขนาด buffer ตามข้อมูลที่คาดว่าจะได้รับ
+      int bytesRead = input.read(buffer); // อ่านข้อมูลจากพอร์ต
+
+      if (bytesRead > 0) {
+        String data = new String(buffer, 0, bytesRead).trim(); // แปลง byte array เป็น String และ trim ช่องว่าง
+        Log.d(
+          TAG,
+          "WeightReader: Raw data received from " +
+          portPath +
+          ": '" +
+          data +
+          "'"
+        ); // พิมพ์ข้อมูลลง Logcat
+        return data; // ส่งข้อมูลดิบที่อ่านได้กลับไป
       } else {
         Log.d(TAG, "WeightReader: No bytes read from " + portPath);
-        // In some cases, read() might return 0 bytes if no data is immediately available
-        // and the stream is not closed. You might want to implement a timeout or polling.
-        return null;
+        return null; // ไม่มีข้อมูลให้อ่าน
       }
     } catch (IOException e) {
       Log.e(
@@ -125,7 +125,7 @@ public class WeightReader {
         ": " +
         e.getMessage()
       );
-      return null;
+      return null; // เกิดข้อผิดพลาดในการอ่าน
     }
   }
 
@@ -139,9 +139,10 @@ public class WeightReader {
    */
   public boolean isPortCurrentlyOpen(String portPath, int baudRate) {
     return (
-      this.input != null &&
-      portPath.equals(this.currentPortPath) &&
-      baudRate == this.currentBaudRate
+      this.input != null && // ต้องมี input stream ที่ทำงานอยู่
+      this.currentPortPath != null &&
+      this.currentPortPath.equals(portPath) &&
+      this.currentBaudRate == baudRate
     );
   }
 
@@ -151,14 +152,16 @@ public class WeightReader {
   public void closePort() {
     try {
       if (input != null) {
-        input.close();
+        input.close(); // ปิด FileInputStream
         input = null;
         Log.d(TAG, "WeightReader: Port closed.");
       }
+    } catch (IOException e) {
+      Log.e(TAG, "WeightReader: Error closing input stream: " + e.getMessage());
+    } finally {
+      // **ล้างสถานะเมื่อปิดพอร์ต**
       currentPortPath = null;
       currentBaudRate = 0;
-    } catch (IOException e) {
-      Log.e(TAG, "WeightReader: Error closing port: " + e.getMessage());
     }
   }
 }

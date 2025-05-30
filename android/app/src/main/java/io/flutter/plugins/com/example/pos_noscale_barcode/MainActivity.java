@@ -1,7 +1,13 @@
-package com.example.pos_noscale_barcode;
+package com.example.pos_noscale_barcode; // ตรวจสอบ package name ให้ถูกต้อง
 
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.util.Log;
 import androidx.annotation.NonNull;
+// เพิ่ม import สำหรับ CoverIMG
+import com.example.pos_noscale_barcode.CoverIMG;
+// เพิ่ม import สำหรับ PrinterNativeIMG
+import com.example.pos_noscale_barcode.PrinterNativeIMG;
 import io.flutter.embedding.android.FlutterActivity;
 import io.flutter.embedding.engine.FlutterEngine;
 import io.flutter.plugin.common.MethodChannel;
@@ -14,6 +20,9 @@ public class MainActivity extends FlutterActivity {
   // **CHANNEL สำหรับ Printer (ตรงกับ 'platform' ใน Flutter)**
   private static final String PRINTER_CHANNEL =
     "com.example.pos_noscale_barcode/printer";
+  // **CHANNEL สำหรับ PrinterNativeIMG**
+  private static final String PRINTERIMG_CHANNEL =
+    "com.example.pos_noscale_barcode/printer_img";
   // **CHANNEL สำหรับ WeightReader (ตรงกับ '_channel' ใน Flutter)**
   private static final String WEIGHT_CHANNEL =
     "com.example.pos_noscale_barcode/printer_weight";
@@ -22,263 +31,305 @@ public class MainActivity extends FlutterActivity {
   private static final String TAG = "MainActivity";
   private PrinterNative printerNative;
   private WeightReader weightReader;
+  private PrinterNativeIMG printerNativeIMG; // ประกาศตัวแปรสำหรับ PrinterNativeIMG
 
-  // ไม่จำเป็นต้องมี isPortOpen หรือ isWeightPortOpen ที่นี่แล้ว
-  // เพราะ PrinterNative และ WeightReader จะดูแลสถานะการเปิดพอร์ตของตัวเอง
-  // และ MainActivity จะเรียก isPortCurrentlyOpen() จาก PrinterNative/WeightReader โดยตรง
-
+  // ไม่จำเป็นต้องมี isPort...
   @Override
   public void configureFlutterEngine(@NonNull FlutterEngine flutterEngine) {
     super.configureFlutterEngine(flutterEngine);
 
     printerNative = new PrinterNative(getContext());
     weightReader = new WeightReader();
+    printerNativeIMG = new PrinterNativeIMG(); // Initialize PrinterNativeIMG
 
-    // **MethodChannel สำหรับ Printer operations**
+    // PRINTER_CHANNEL
     new MethodChannel(
       flutterEngine.getDartExecutor().getBinaryMessenger(),
-      PRINTER_CHANNEL // ใช้ PRINTER_CHANNEL เพื่อให้ตรงกับ 'platform' ใน Flutter
-    ).setMethodCallHandler((call, result) -> {
-      String portPath;
-      byte[] printData;
-      boolean success;
-
-      switch (call.method) {
-        case "getPorts":
-          ArrayList<String> ports = new ArrayList<>();
-          File dev = new File("/dev");
-          File[] files = dev.listFiles((dir, name) -> name.startsWith("tty"));
-          if (files != null) {
-            for (File file : files) {
-              ports.add(file.getAbsolutePath());
-            }
-          }
-          result.success(ports);
-          break;
-        case "openPort":
-          portPath = call.argument("portPath");
-          Integer baudRateInteger = call.argument("baudRate");
-          if (portPath == null || baudRateInteger == null) {
-            result.error(
-              "INVALID_ARGUMENTS",
-              "Port path and baud rate required",
-              null
-            );
-            return;
-          }
-          int baudRate = baudRateInteger.intValue();
-
-          // ตรวจสอบพอร์ตขัดแย้งกับ WeightReader ก่อนเปิด
-          if (weightReader.isPortCurrentlyOpen(portPath, baudRate)) {
-            result.error(
-              "PORT_CONFLICT",
-              "Port " + portPath + " is currently in use by WeightReader.",
-              null
-            );
-            return;
-          }
-
-          success = printerNative.openPort(portPath, baudRate);
-          if (success) {
-            result.success("Port opened successfully");
-          } else {
-            result.error("OPEN_ERROR", "Failed to open printer port", null);
-          }
-          break;
-        case "sendFeedCommand":
-          portPath = call.argument("portPath");
+      PRINTER_CHANNEL
+    )
+      .setMethodCallHandler(
+        (call, result) -> {
+          String portPath = call.argument("portPath");
+          int baudRate = call.argument("baudRate");
           if (portPath == null) {
-            result.error("INVALID_PORT", "Port path is required", null);
-            return;
-          }
-          // ตรวจสอบว่าพอร์ตของ PrinterNative เปิดอยู่หรือไม่
-          if (!printerNative.isPortCurrentlyOpen(portPath, 115200)) { // ใช้ baudRate ที่คุณใช้เปิด port เครื่องพิมพ์
             result.error(
-              "PORT_CLOSED",
-              "Printer port is not open or parameters mismatched",
+              "INVALID_ARGUMENT",
+              "Port path cannot be null.",
               null
             );
             return;
           }
 
-          success = printerNative.sendCommand(portPath);
-          if (success) {
-            result.success("Command sent successfully");
-          } else {
-            result.error("SEND_ERROR", "Failed to send command", null);
-          }
-          break;
-        case "closePort": // ปิดพอร์ตเครื่องพิมพ์
-          printerNative.closePort();
-          result.success("Printer port closed");
-          break;
-        case "printTestPattern":
-          String testPortPath = call.argument("portPath");
-          if (testPortPath == null) {
-            result.error("INVALID_PORT", "Port path is required", null);
-            return;
-          }
-          if (!printerNative.isPortCurrentlyOpen(testPortPath, 115200)) { // ใช้ baudRate ที่คุณใช้เปิด port เครื่องพิมพ์
-            result.error(
-              "PORT_CLOSED",
-              "Printer port is not open or parameters mismatched",
-              null
-            );
-            return;
-          }
-          boolean testSuccess = printerNative.printTestPattern(testPortPath);
-          if (testSuccess) {
-            result.success("Test pattern printed successfully");
-          } else {
-            result.error("PRINT_ERROR", "Failed to print test pattern", null);
-          }
-          break;
-        case "printText":
-          portPath = call.argument("portPath");
-          printData = call.argument("data");
+          switch (call.method) {
+            case "openPrinterPort":
+              // ตรวจสอบว่าพอร์ตถูกใช้โดย PrinterNativeIMG หรือ WeightReader หรือไม่
+              if (
+                printerNativeIMG.isPortCurrentlyOpen(
+                  portPath,
+                  printerNativeIMG.currentlyOpenBaudRate != null
+                    ? printerNativeIMG.currentlyOpenBaudRate
+                    : 0
+                )
+              ) {
+                result.error(
+                  "PORT_CONFLICT",
+                  "Port " + portPath + " is currently in use by PrinterNativeIMG.",
+                  null
+                );
+                return;
+              }
+              if (
+                weightReader.isPortCurrentlyOpen(
+                  portPath,
+                  weightReader.currentlyOpenBaudRate != null
+                    ? weightReader.currentlyOpenBaudRate
+                    : 0
+                )
+              ) {
+                result.error(
+                  "PORT_CONFLICT",
+                  "Port " + portPath + " is currently in use by WeightReader.",
+                  null
+                );
+                return;
+              }
 
-          if (portPath == null || printData == null) {
-            result.error(
-              "INVALID_ARGUMENTS",
-              "Port path and data required",
-              null
-            );
-            return;
+              boolean opened = printerNative.openPort(portPath, baudRate);
+              if (opened) {
+                result.success(true);
+              } else {
+                result.error("OPEN_FAILED", "Failed to open printer port.", null);
+              }
+              break;
+            case "closePrinterPort":
+              printerNative.closePort();
+              result.success(true);
+              break;
+            case "printTestPattern":
+              boolean printedTest = printerNative.printTestPattern(portPath);
+              if (printedTest) {
+                result.success(true);
+              } else {
+                result.error(
+                  "PRINT_FAILED",
+                  "Failed to print test pattern.",
+                  null
+                );
+              }
+              break;
+            case "printText":
+              String textToPrint = call.argument("text");
+              if (textToPrint == null) {
+                result.error("INVALID_ARGUMENT", "Text cannot be null.", null);
+                return;
+              }
+              // แปลงข้อความเป็น UTF-8 bytes ก่อนส่ง
+              byte[] textBytes = textToPrint.getBytes("UTF-8");
+              boolean printedText = printerNative.printText(portPath, textBytes);
+              if (printedText) {
+                result.success(true);
+              } else {
+                result.error("PRINT_FAILED", "Failed to print text.", null);
+              }
+              break;
+            case "feedLines":
+              int lines = call.argument("lines");
+              boolean fedLines = printerNative.feedLines(portPath, lines);
+              if (fedLines) {
+                result.success(true);
+              } else {
+                result.error("FEED_FAILED", "Failed to feed lines.", null);
+              }
+              break;
+            case "printBytes":
+              ArrayList<Object> byteList = call.argument("bytes");
+              if (byteList == null) {
+                result.error("INVALID_ARGUMENT", "Bytes cannot be null.", null);
+                return;
+              }
+              byte[] bytesToPrint = new byte[byteList.size()];
+              for (int i = 0; i < byteList.size(); i++) {
+                bytesToPrint[i] = ((Number) byteList.get(i)).byteValue();
+              }
+              boolean printedBytes = printerNative.printBytes(portPath, bytesToPrint);
+              if (printedBytes) {
+                result.success(true);
+              } else {
+                result.error("PRINT_FAILED", "Failed to print bytes.", null);
+              }
+              break;
+            default:
+              result.notImplemented();
+              break;
           }
-          if (!printerNative.isPortCurrentlyOpen(portPath, 115200)) { // ใช้ baudRate ที่คุณใช้เปิด port เครื่องพิมพ์
-            result.error(
-              "PORT_CLOSED",
-              "Printer port is not open or parameters mismatched",
-              null
-            );
-            return;
-          }
+        }
+      );
 
-          success = printerNative.printText(portPath, printData);
-          if (success) {
-            result.success(true);
-          } else {
-            result.error("PRINT_ERROR", "Failed to print text", null);
-          }
-          break;
-        case "feedLines":
-          String feedPortPath = call.argument("portPath");
-          Integer lines = call.argument("lines");
-          if (feedPortPath == null || lines == null) {
-            result.error("INVALID_ARGS", "Port path and lines required", null);
-            return;
-          }
-          if (!printerNative.isPortCurrentlyOpen(feedPortPath, 115200)) { // ใช้ baudRate ที่คุณใช้เปิด port เครื่องพิมพ์
-            result.error(
-              "PORT_CLOSED",
-              "Printer port is not open or parameters mismatched",
-              null
-            );
-            return;
-          }
-          boolean feedSuccess = printerNative.feedLines(feedPortPath, lines);
-          if (feedSuccess) {
-            result.success("Fed " + lines + " lines successfully");
-          } else {
-            result.error("FEED_ERROR", "Failed to feed paper", null);
-          }
-          break;
-        case "printBytes":
-          String bytesPortPath = call.argument("portPath");
-          byte[] bytesData = call.argument("data");
-
-          if (bytesPortPath == null || bytesData == null) {
-            result.error(
-              "INVALID_ARGUMENTS",
-              "Port path and data required",
-              null
-            );
-            return;
-          }
-          if (!printerNative.isPortCurrentlyOpen(bytesPortPath, 115200)) { // ใช้ baudRate ที่คุณใช้เปิด port เครื่องพิมพ์
-            result.error(
-              "PORT_CLOSED",
-              "Printer port is not open or parameters mismatched",
-              null
-            );
-            return;
-          }
-
-          boolean bytesPrintSuccess = printerNative.printBytes(
-            bytesPortPath,
-            bytesData
-          );
-          if (bytesPrintSuccess) {
-            result.success(true);
-          } else {
-            result.error("PRINT_ERROR", "Failed to print bytes", null);
-          }
-          break;
-        default:
-          result.notImplemented();
-          break;
-      }
-    });
-
-    // **MethodChannel สำหรับ WeightReader operations**
+    // PRINTERIMG_CHANNEL
     new MethodChannel(
       flutterEngine.getDartExecutor().getBinaryMessenger(),
-      WEIGHT_CHANNEL // ใช้ WEIGHT_CHANNEL เพื่อให้ตรงกับ '_channel' ใน Flutter
-    ).setMethodCallHandler((call, result) -> {
-      String portPath;
-      Integer baudRateReadInteger;
-      int baudRateRead;
-
-      switch (call.method) {
-        case "readWeight":
-          portPath = call.argument("portPath");
-          baudRateReadInteger = call.argument("baudRate");
-
-          if (portPath == null || baudRateReadInteger == null) {
+      PRINTERIMG_CHANNEL
+    )
+      .setMethodCallHandler(
+        (call, result) -> {
+          String portPath = call.argument("portPath");
+          int baudRate = call.argument("baudRate");
+          if (portPath == null) {
             result.error(
-              "INVALID_ARGUMENTS",
-              "Port path and baud rate required",
-              null
-            );
-            return;
-          }
-          baudRateRead = baudRateReadInteger.intValue();
-
-          // ตรวจสอบพอร์ตขัดแย้งกับ PrinterNative ก่อนเรียกอ่านน้ำหนัก
-          if (printerNative.isPortCurrentlyOpen(portPath, baudRateRead)) {
-            result.error(
-              "PORT_CONFLICT",
-              "Port " + portPath + " is currently in use by PrinterNative.",
+              "INVALID_ARGUMENT",
+              "Port path cannot be null.",
               null
             );
             return;
           }
 
-          // เรียกใช้เมธอด readAndLogRawData จาก WeightReader
-          // WeightReader จะจัดการการเปิด/ปิดพอร์ตของตัวเอง
-          String rawData = weightReader.readAndLogRawData(
-            portPath,
-            baudRateRead
-          );
-          if (rawData != null) {
-            result.success(rawData);
-          } else {
+          switch (call.method) {
+            case "openPrinterImgPort":
+              // ตรวจสอบว่าพอร์ตถูกใช้โดย PrinterNative หรือ WeightReader หรือไม่
+              if (
+                printerNative.isPortCurrentlyOpen(
+                  portPath,
+                  printerNative.currentlyOpenBaudRate != null
+                    ? printerNative.currentlyOpenBaudRate
+                    : 0
+                )
+              ) {
+                result.error(
+                  "PORT_CONFLICT",
+                  "Port " + portPath + " is currently in use by PrinterNative.",
+                  null
+                );
+                return;
+              }
+              if (
+                weightReader.isPortCurrentlyOpen(
+                  portPath,
+                  weightReader.currentlyOpenBaudRate != null
+                    ? weightReader.currentlyOpenBaudRate
+                    : 0
+                )
+              ) {
+                result.error(
+                  "PORT_CONFLICT",
+                  "Port " + portPath + " is currently in use by WeightReader.",
+                  null
+                );
+                return;
+              }
+              boolean opened = printerNativeIMG.openPort(portPath, baudRate);
+              if (opened) {
+                result.success(true);
+              } else {
+                result.error("OPEN_FAILED", "Failed to open printer image port.", null);
+              }
+              break;
+            case "closePrinterImgPort":
+              printerNativeIMG.closePort();
+              result.success(true);
+              break;
+            case "printImage": // <-- เมธอดใหม่สำหรับพิมพ์รูปภาพ
+                byte[] imageBytes = call.argument("imageBytes");
+                if (imageBytes == null) {
+                    result.error("INVALID_ARGUMENT", "Image bytes cannot be null.", null);
+                    return;
+                }
+                Bitmap bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.length);
+                if (bitmap == null) {
+                    result.error("IMAGE_DECODE_FAILED", "Failed to decode image bytes into Bitmap.", null);
+                    return;
+                }
+                boolean printedImage = printerNativeIMG.printBitmap(portPath, bitmap);
+                if (printedImage) {
+                    result.success(true);
+                } else {
+                    result.error("PRINT_IMAGE_FAILED", "Failed to print image.", null);
+                }
+                break;
+            default:
+              result.notImplemented();
+              break;
+          }
+        }
+      );
+
+    // WEIGHT_CHANNEL
+    new MethodChannel(
+      flutterEngine.getDartExecutor().getBinaryMessenger(),
+      WEIGHT_CHANNEL
+    )
+      .setMethodCallHandler(
+        (call, result) -> {
+          String portPath = call.argument("portPath");
+          int baudRateRead = call.argument("baudRate");
+          if (portPath == null) {
             result.error(
-              "READ_ERROR",
-              "Failed to read raw data from scale",
+              "INVALID_ARGUMENT",
+              "Port path cannot be null.",
               null
             );
+            return;
           }
-          break;
-        case "closeWeightPort": // เมธอดสำหรับปิดพอร์ตเครื่องชั่งโดยเฉพาะ
-          weightReader.closePort();
-          result.success("Weight port closed");
-          break;
-        default:
-          result.notImplemented();
-          break;
-      }
-    });
+
+          switch (call.method) {
+            case "readWeight":
+              // ตรวจสอบว่าพอร์ตถูกใช้โดย PrinterNative หรือ PrinterNativeIMG หรือไม่
+              if (
+                printerNative.isPortCurrentlyOpen(
+                  portPath,
+                  printerNative.currentlyOpenBaudRate != null
+                    ? printerNative.currentlyOpenBaudRate
+                    : 0
+                )
+              ) {
+                result.error(
+                  "PORT_CONFLICT",
+                  "Port " + portPath + " is currently in use by PrinterNative.",
+                  null
+                );
+                return;
+              }
+              if (
+                printerNativeIMG.isPortCurrentlyOpen(
+                  portPath,
+                  printerNativeIMG.currentlyOpenBaudRate != null
+                    ? printerNativeIMG.currentlyOpenBaudRate
+                    : 0
+                )
+              ) {
+                result.error(
+                  "PORT_CONFLICT",
+                  "Port " + portPath + " is currently in use by PrinterNativeIMG.",
+                  null
+                );
+                return;
+              }
+
+              // เรียกใช้เมธอด readAndLogRawData จาก WeightReader
+              // WeightReader จะจัดการการเปิด/ปิดพอร์ตของตัวเอง
+              String rawData = weightReader.readAndLogRawData(
+                portPath,
+                baudRateRead
+              );
+              if (rawData != null) {
+                result.success(rawData);
+              } else {
+                result.error(
+                  "READ_ERROR",
+                  "Failed to read raw data from scale",
+                  null
+                );
+              }
+              break;
+            case "closeWeightPort": // เมธอดสำหรับปิดพอร์ตเครื่องชั่งโดยเฉพาะ
+              weightReader.closePort();
+              result.success("Weight port closed");
+              break;
+            default:
+              result.notImplemented();
+              break;
+          }
+        }
+      );
   }
 
   @Override
@@ -286,6 +337,10 @@ public class MainActivity extends FlutterActivity {
     // ปิดพอร์ตเครื่องพิมพ์หากเปิดอยู่
     if (printerNative != null) {
       printerNative.closePort();
+    }
+    // ปิดพอร์ตเครื่องพิมพ์รูปภาพหากเปิดอยู่
+    if (printerNativeIMG != null) {
+      printerNativeIMG.closePort();
     }
     // ปิดพอร์ตเครื่องชั่งหากเปิดอยู่
     if (weightReader != null) {

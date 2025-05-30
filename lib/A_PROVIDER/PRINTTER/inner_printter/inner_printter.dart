@@ -17,6 +17,8 @@ import 'package:pos_noscale_barcode/A_SQLITE/sqlite.dart';
 import 'package:provider/provider.dart';
 
 class inner_printter_provider with ChangeNotifier {
+  static const MethodChannel _printerImgChannel =
+      MethodChannel('com.example.pos_noscale_barcode/printer_img');
   static const MethodChannel _weightChannel =
       MethodChannel('com.example.pos_noscale_barcode/printer_weight');
   static const platform =
@@ -41,6 +43,107 @@ class inner_printter_provider with ChangeNotifier {
       }
     } on PlatformException catch (e) {
       print("Failed to initialize printer: ${e.message}");
+    }
+  }
+
+// ฟังก์ชันสำหรับเปิดพอร์ตเครื่องพิมพ์รูปภาพ
+  Future<bool> openPrinterIMGPort(String portPath, int baudRate) async {
+    try {
+      final bool? success = await _printerImgChannel.invokeMethod(
+        'openPrinterIMGPort',
+        {'portPath': portPath, 'baudRate': baudRate},
+      );
+      return success ?? false;
+    } on PlatformException catch (e) {
+      print("Failed to open printer image port: '${e.message}'.");
+      return false;
+    }
+  }
+
+// ฟังก์ชันสำหรับพิมพ์รูปภาพ
+  Future<bool> printImage(String portPath, Uint8List imageData) async {
+    try {
+      final bool? success = await _printerImgChannel.invokeMethod(
+        'printImage',
+        {'portPath': portPath, 'imageData': imageData},
+      );
+      return success ?? false;
+    } on PlatformException catch (e) {
+      print("Failed to print image: '${e.message}'.");
+      return false;
+    }
+  }
+
+// ฟังก์ชันสำหรับปิดพอร์ตเครื่องพิมพ์รูปภาพ
+  Future<bool> closePrinterIMGPort() async {
+    try {
+      final bool? success =
+          await _printerImgChannel.invokeMethod('closePrinterIMGPort');
+      return success ?? false;
+    } on PlatformException catch (e) {
+      print("Failed to close printer image port: '${e.message}'.");
+      return false;
+    }
+  }
+
+  void _handlePrintImage() async {
+    String portPath = "/dev/ttyS3"; // หรือพอร์ตที่ถูกต้องของคุณ
+    int baudRate = 9600; // หรือ baud rate ที่ถูกต้องของคุณ
+
+    // สมมติว่าคุณมี Uint8List ของรูปภาพที่ประมวลผลแล้ว
+    // byte[] processedImageBytes = CoverIMG.processImageForPrinter(...);
+    // คุณต้องเรียก processImageForPrinter ผ่าน MethodChannel ของ PrinterNative
+    // หรือประมวลผลภาพใน Dart ก่อน แล้วส่งมาให้ printImage
+
+    // ตัวอย่าง: ถ้าคุณมี raw image data (e.g., จาก AssetImage, File)
+    // คุณต้องเรียก `processImageForPrinter` ผ่าน channel 'com.example.pos_noscale_barcode/printer' ก่อน
+    // แล้วค่อยส่งผลลัพธ์มาที่ `printImage` ของ channel 'com.example.pos_noscale_barcode/printer_img'
+
+    // ขั้นตอนที่ 1: ประมวลผลรูปภาพ (สมมติว่ามี `rawImageData` เป็น Uint8List)
+    // คุณอาจต้องใช้ MethodChannel เดิม `_printerChannel` เพื่อเรียก `processImageForPrinter`
+    // เนื่องจากคุณได้เพิ่ม case นั้นไว้ใน `MainActivity.java` แล้ว
+    // const MethodChannel _printerChannel = MethodChannel('com.example.pos_noscale_barcode/printer');
+    // Uint8List? processedImageBytes = await _printerChannel.invokeMethod(
+    //   'processImageForPrinter',
+    //   {'imageData': rawImageData, 'targetWidth': 384}, // targetWidth ขึ้นอยู่กับเครื่องพิมพ์
+    // );
+
+    // ถ้า `processedImageBytes` ไม่เป็น null แสดงว่าประมวลผลสำเร็จ
+    // ตอนนี้ `processedImageBytes` ควรจะมีรูปแบบ ESC * m nL nH d1...dk
+    // (ตามที่ `CoverIMG.java` ควรจะสร้าง)
+
+    Uint8List?
+        processedImageBytes; // ต้องแทนที่ด้วยข้อมูลรูปภาพจริงที่ประมวลผลแล้ว
+
+    // สมมติว่านี่คือข้อมูลรูปภาพที่ประมวลผลแล้วและพร้อมสำหรับเครื่องพิมพ์
+    // เช่น bytearray ที่คุณแสดงในตัวอย่าง Python
+    // สำหรับการทดสอบเบื้องต้น คุณอาจสร้าง bytearray แบบง่ายๆ เช่นนี้
+    // นี่เป็นเพียงตัวอย่างที่ไม่ใช่รูปภาพจริง
+    processedImageBytes = Uint8List.fromList([
+      0x1B, 0x2A, // ESC *
+      0x21, // m (mode: 33 = 24-dot double density)
+      0x20, 0x00, // nL nH (width = 32 dots = 4 bytes, for example)
+      0xAA, 0x55, 0xAA, 0x55, // data (example 4 bytes)
+      0xAA, 0x55, 0xAA, 0x55, // data (example 4 bytes)
+      0xAA, 0x55, 0xAA, 0x55, // data (example 4 bytes)
+      0x0A // LF
+    ]);
+
+    if (processedImageBytes != null) {
+      bool openSuccess = await openPrinterIMGPort(portPath, baudRate);
+      if (openSuccess) {
+        bool printSuccess = await printImage(portPath, processedImageBytes);
+        if (printSuccess) {
+          print("Image printed successfully!");
+        } else {
+          print("Failed to print image.");
+        }
+        await closePrinterIMGPort();
+      } else {
+        print("Failed to open printer image port.");
+      }
+    } else {
+      print("Image processing failed.");
     }
   }
 
@@ -157,6 +260,7 @@ class inner_printter_provider with ChangeNotifier {
       0x00,
       0x00
     ];
+
     List<int> DATA2 = [
       0x02,
       0x40,
